@@ -28,6 +28,8 @@ from kwave.utils.filters import smooth
 from kwave.utils.matlab import matlab_find, matlab_mask
 from kwave.utils.matrix import num_dim2
 
+import time
+
 
 @dataclass
 class kWaveSimulation(object):
@@ -471,6 +473,7 @@ class kWaveSimulation(object):
         Returns:
             None
         """
+        t0 = time.time()
         self.calling_func_name = calling_func_name
 
         k_dim = self.kgrid.dim
@@ -480,6 +483,8 @@ class kWaveSimulation(object):
         # run subscript to check optional inputs
         self.options = SimulationOptions.option_factory(self.kgrid, self.options)
         opt = self.options
+        t1 = time.time()
+        print(f"Initial setup took {t1-t0:.3f} seconds")
 
         # TODO(Walter): clean this up with getters in simulation options pml size
         pml_x_size, pml_y_size, pml_z_size = opt.pml_x_size, opt.pml_y_size, opt.pml_z_size
@@ -490,24 +495,54 @@ class kWaveSimulation(object):
         self.set_index_data_type()
 
         user_medium_density_input = self.check_medium(self.medium, self.kgrid.k, simulation_type=opt.simulation_type)
+        t2 = time.time()
+        print(f"Medium checking took {t2-t1:.3f} seconds")
 
         # select the reference sound speed used in the k-space operator
         self.c_ref, self.c_ref_compression, self.c_ref_shear = set_sound_speed_ref(self.medium, opt.simulation_type)
 
         self.check_source(k_dim, self.kgrid.Nt)
+        t3 = time.time()
+        print(f"Source checking took {t3-t2:.3f} seconds")
+
         self.check_sensor(k_dim)
+        t4 = time.time()
+        print(f"Sensor checking took {t4-t3:.3f} seconds")
+
+        t5 = time.time()
         self.check_kgrid_time()
+        t6 = time.time()
+        print(f"Kgrid time check took {t6-t5:.3f} seconds")
         self.precision = self.select_precision(opt)
+        t7 = time.time()
+        print(f"Precision selection took {t7-t6:.3f} seconds")
         self.check_input_combinations(opt, user_medium_density_input, k_dim, pml_size, self.kgrid.N)
+        t8 = time.time()
+        print(f"Input validation took {t8-t7:.3f} seconds")
 
         # run subscript to display time step, max supported frequency etc.
         display_simulation_params(self.kgrid, self.medium, is_elastic_code)
 
         self.smooth_and_enlarge(self.source, k_dim, Vector(self.kgrid.N), opt)
+        t6 = time.time()
+        print(f"Source smoothing took {t6-t5:.3f} seconds")
+
         self.create_sensor_variables()
+        t7 = time.time()
+        print(f"Sensor variable creation took {t7-t6:.3f} seconds")
+
         self.create_absorption_vars()
+        t8 = time.time()
+        print(f"Absorption variable creation took {t8-t7:.3f} seconds")
+
         self.assign_pseudonyms(self.medium, self.kgrid)
+        t9 = time.time()
+        print(f"Pseudonym assignment took {t9-t8:.3f} seconds")
+
         self.scale_source_terms(opt.scale_source_terms)
+        t10 = time.time()
+        print(f"Source term scaling took {t10-t9:.3f} seconds")
+
         self.create_pml_indices(
             kgrid_dim=self.kgrid.dim,
             kgrid_N=Vector(self.kgrid.N),
@@ -515,6 +550,9 @@ class kWaveSimulation(object):
             pml_inside=opt.pml_inside,
             is_axisymmetric=opt.simulation_type.is_axisymmetric(),
         )
+        t11 = time.time()
+        print(f"PML index creation took {t11-t10:.3f} seconds")
+        print(f"Total input checking took {t11-t0:.3f} seconds")
 
     @staticmethod
     def check_calling_func_name_and_dim(calling_func_name, kgrid_dim) -> None:
@@ -1033,7 +1071,9 @@ class kWaveSimulation(object):
         if not self.options.simulation_type.is_elastic_simulation():
             # calculate the largest timestep for which the model is stable
 
+            t0 = time.time()
             dt_stability_limit = check_stability(self.kgrid, self.medium)
+            print(f"Stability check took {time.time() - t0:.3f} seconds")
 
             # give a warning if the timestep is larger than stability limit allows
             if self.kgrid.dt > dt_stability_limit:
@@ -1090,6 +1130,7 @@ class kWaveSimulation(object):
         # CHECK FOR VALID INPUT COMBINATIONS
         # =========================================================================
 
+        # t0 = time.time()
         # enforce density input if velocity sources or output are being used
         if not user_medium_density_input and (
             self.source_ux or self.source_uy or self.source_uz or self.record.u or self.record.u_max or self.record.u_rms
@@ -1097,22 +1138,30 @@ class kWaveSimulation(object):
             raise ValueError(
                 "medium.density must be explicitly defined " "if velocity inputs or outputs are used, even in homogeneous media."
             )
+        # print(f"Velocity source check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # TODO(walter): move to check medium
         # enforce density input if nonlinear equations are being used
         if not user_medium_density_input and self.medium.is_nonlinear():
             raise ValueError("medium.density must be explicitly defined if medium.BonA is specified.")
+        # print(f"Nonlinear check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # check sensor compatability options for flgs.compute_directivity
         if self.use_sensor and k_dim == 2 and self.compute_directivity and not self.binary_sensor_mask and opt.cartesian_interp == "linear":
             raise ValueError(
                 "sensor directivity fields are only compatible " "with binary sensor masks or " "CartInterp" " set to " "nearest" "."
             )
+        # print(f"Sensor compatibility check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # check for split velocity output
         if self.record.u_split_field and not self.binary_sensor_mask:
             raise ValueError("The option sensor.record = {" "u_split_field" "} is only compatible " "with a binary sensor mask.")
+        # print(f"Split velocity check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # check input options for data streaming *****
         if opt.stream_to_disk:
             if not self.use_sensor or self.time_rev:
@@ -1126,7 +1175,9 @@ class kWaveSimulation(object):
                 raise ValueError(
                     "The optional input " "StreamToDisk" " is currently only compatible " "with sensor.record = {" "p" "} (the default)."
                 )
+        # print(f"Stream to disk check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         is_axisymmetric = self.options.simulation_type.is_axisymmetric()
         # make sure the PML size is smaller than the grid if PMLInside is true
         if opt.pml_inside and (
@@ -1136,10 +1187,13 @@ class kWaveSimulation(object):
             or (k_dim == 3 and ((pml_size.x * 2 > kgrid_N[0]) or (pml_size.x * 2 > kgrid_N[1]) or (pml_size.z * 2 > kgrid_N[2])))
         ):
             raise ValueError("The size of the PML must be smaller than the size of the grid.")
+        # print(f"PML size check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # make sure the PML is inside if using a non-uniform grid
         if self.nonuniform_grid and not opt.pml_inside:
             raise ValueError("''PMLInside'' must be true for simulations using non-uniform grids.")
+        # print(f"Non-uniform grid check took {time.time() - t0:0.4f} seconds")
 
         # check for compatible input options if saving to disk
         # modified by Farid | disabled temporarily!
@@ -1148,11 +1202,14 @@ class kWaveSimulation(object):
         #     raise ValueError('The optional input ''SaveToDisk'' is currently only compatible
         #                       with forward simulations using a non-zero binary sensor mask.')
 
+        # t0 = time.time()
         # check the record start time is within range
         record_start_index = self.sensor.record_start_index
         if self.use_sensor and ((record_start_index > self.kgrid.Nt) or (record_start_index < 1)):
             raise ValueError("sensor.record_start_index must be between 1 and the number of time steps.")
+        # print(f"Record start time check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # ensure 'WSWA' symmetry if using axisymmetric code with 'SaveToDisk'
         if is_axisymmetric and self.options.radial_symmetry != "WSWA" and isinstance(self.options.save_to_disk, str):
             # display a warning only if using WSWS symmetry (not WSWA-FFT)
@@ -1163,23 +1220,32 @@ class kWaveSimulation(object):
 
             # update setting
             self.options.radial_symmetry = "WSWA"
+        # print(f"Symmetry check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # ensure p0 smoothing is switched off if p0 is empty
         if not self.source_p0:
             self.options.smooth_p0 = False
+        # print(f"p0 smoothing check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # start log if required
         if opt.create_log:
             raise NotImplementedError(f"diary({self.LOG_NAME}.txt');")
+        # print(f"Log creation check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # update command line status
         if self.time_rev:
             logging.log(logging.INFO, "  time reversal mode")
+        # print(f"Time reversal check took {time.time() - t0:0.4f} seconds")
 
+        # t0 = time.time()
         # cleanup unused variables
         for k in list(self.__dict__.keys()):
             if k.endswith("_DEF"):
                 delattr(self, k)
+        # print(f"Cleanup took {time.time() - t0:0.4f} seconds")
 
     def smooth_and_enlarge(self, source, k_dim, kgrid_N, opt: SimulationOptions) -> None:
         """

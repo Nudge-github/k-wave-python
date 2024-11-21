@@ -13,10 +13,10 @@ from kwave.ktransducer import NotATransducer
 from kwave.options.simulation_execution_options import SimulationExecutionOptions
 from kwave.options.simulation_options import SimulationOptions
 from kwave.utils.dotdictionary import dotdict
-from kwave.utils.interp import interpolate3d
+from kwave.utils.interp import interpolate3d, interpolate3d_torch
 from kwave.utils.pml import get_pml
 from kwave.utils.tictoc import TicToc
-
+import time
 
 def kspaceFirstOrder3DG(
     kgrid: kWaveGrid,
@@ -295,13 +295,21 @@ def kspaceFirstOrder3D(
         else:
             raise ValueError("CPU simulation requires saving to disk. Please set SimulationOptions.save_to_disk=True")
 
+    print("Preparing kWaveSimulation")
+    t0 = time.time()
     k_sim = kWaveSimulation(kgrid=kgrid, source=source, sensor=sensor, medium=medium, simulation_options=simulation_options)
+    t1 = time.time()
+    print(f"kWaveSimulation took {t1-t0:.3f} seconds")
     k_sim.input_checking("kspaceFirstOrder3D")
+    t2 = time.time()
+    print(f"input_checking took {t2-t1:.3f} seconds")
 
     # =========================================================================
     # CALCULATE MEDIUM PROPERTIES ON STAGGERED GRID
     # =========================================================================
     options = k_sim.options
+
+    print("Calculating medium properties on staggered grid")
 
     # TODO(walter): this could all be moved inside of ksim
 
@@ -311,9 +319,41 @@ def kspaceFirstOrder3D(
     if k_sim.rho0.ndim == 3 and options.use_sg:
         # rho0 is heterogeneous and staggered grids are used
         grid_points = [k_sim.kgrid.x, k_sim.kgrid.y, k_sim.kgrid.z]
-        k_sim.rho0_sgx = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x + k_sim.kgrid.dx / 2, k_sim.kgrid.y, k_sim.kgrid.z])
-        k_sim.rho0_sgy = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y + k_sim.kgrid.dy / 2, k_sim.kgrid.z])
-        k_sim.rho0_sgz = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y, k_sim.kgrid.z + k_sim.kgrid.dz / 2])
+        # k_sim.rho0_sgx = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x + k_sim.kgrid.dx / 2, k_sim.kgrid.y, k_sim.kgrid.z])
+        # k_sim.rho0_sgy = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y + k_sim.kgrid.dy / 2, k_sim.kgrid.z])
+        # k_sim.rho0_sgz = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y, k_sim.kgrid.z + k_sim.kgrid.dz / 2])
+        # Time scipy interpolation
+        # t0 = time.time()
+        # resx = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x + k_sim.kgrid.dx / 2, k_sim.kgrid.y, k_sim.kgrid.z])
+        # resy = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y + k_sim.kgrid.dy / 2, k_sim.kgrid.z])
+        # resz = interpolate3d(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y, k_sim.kgrid.z + k_sim.kgrid.dz / 2])
+        # t1 = time.time()
+        # print(f"Scipy interpolation took {t1-t0:.3f} seconds")
+        
+        # Time torch interpolation 
+        t0 = time.time()
+        # resx_torch = interpolate3d_torch(grid_points, k_sim.rho0, [k_sim.kgrid.x + k_sim.kgrid.dx / 2, k_sim.kgrid.y, k_sim.kgrid.z])
+        # resy_torch = interpolate3d_torch(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y + k_sim.kgrid.dy / 2, k_sim.kgrid.z])
+        # resz_torch = interpolate3d_torch(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y, k_sim.kgrid.z + k_sim.kgrid.dz / 2])
+        k_sim.rho0_sgx = interpolate3d_torch(grid_points, k_sim.rho0, [k_sim.kgrid.x + k_sim.kgrid.dx / 2, k_sim.kgrid.y, k_sim.kgrid.z])
+        k_sim.rho0_sgy = interpolate3d_torch(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y + k_sim.kgrid.dy / 2, k_sim.kgrid.z])
+        k_sim.rho0_sgz = interpolate3d_torch(grid_points, k_sim.rho0, [k_sim.kgrid.x, k_sim.kgrid.y, k_sim.kgrid.z + k_sim.kgrid.dz / 2])
+        t1 = time.time()
+        k_sim.rho0_sgx[:1] = k_sim.rho0[:1]
+        k_sim.rho0_sgx[-1:] = k_sim.rho0[-1:]
+        k_sim.rho0_sgy[:, :1] = k_sim.rho0[:, :1]
+        k_sim.rho0_sgy[:, -1:] = k_sim.rho0[:, -1:]
+        k_sim.rho0_sgz[:, :, :1] = k_sim.rho0[:, :, :1]
+        k_sim.rho0_sgz[:, :, -1:] = k_sim.rho0[:, :, -1:]
+
+        print(f"Torch interpolation took {t1-t0:.3f} seconds")
+        # breakpoint()
+        # assert np.allclose(resx, resx_torch, rtol=0.01)
+        # assert np.allclose(resy, resy_torch, rtol=0.01)
+        # assert np.allclose(resz, resz_torch, rtol=0.01)
+        # assert np.allclose(resx[1:-1, 1:-1, 1:-1], resx_torch[1:-1, 1:-1, 1:-1], rtol=0.01)
+        # assert np.allclose(resy[1:-1, 1:-1, 1:-1], resy_torch[1:-1, 1:-1, 1:-1], rtol=0.01)
+        # assert np.allclose(resz[1:-1, 1:-1, 1:-1], resz_torch[1:-1, 1:-1, 1:-1], rtol=0.01)
     else:
         # rho0 is homogeneous or staggered grids are not used
         k_sim.rho0_sgx = k_sim.rho0

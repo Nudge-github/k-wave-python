@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 from .conversion import db2neper
 from .math import sinc, primefactors
+import time
 
 
 def enforce_fields(dictionary, *fields):
@@ -159,12 +160,15 @@ def check_stability(kgrid: "kWaveGrid", medium: "kWaveMedium") -> float:
          The maximum time step for which the models are stable. This is set to Inf when the model is unconditionally stable.
 
     """
+    t0 = time.time()
 
     # why? : this function was migrated from Matlab.
     # Matlab would treat the 'medium' as a "pass by value" argument.
     # In python argument is passed by reference and changes in this function will cause original data to be changed.
     # Instead of making significant changes to the function, we make a deep copy of the argument
     medium = deepcopy(medium)
+    t1 = time.time()
+    print(f"check_stability: deepcopy took {t1-t0:.3f} seconds")
 
     # define literals
     FIXED_POINT_ACCURACY = 1e-12
@@ -187,6 +191,8 @@ def check_stability(kgrid: "kWaveGrid", medium: "kWaveMedium") -> float:
                 raise NotImplementedError("Unknown input for medium.sound_speed_ref.")
     else:
         c_ref = reductions["max"](medium.sound_speed)
+    t2 = time.time()
+    print(f"check_stability: sound speed reference calculation took {t2-t1:.3f} seconds")
 
     # calculate the timesteps required for stability
     if medium.alpha_coeff is None or np.all(medium.alpha_coeff == 0):
@@ -202,6 +208,8 @@ def check_stability(kgrid: "kWaveGrid", medium: "kWaveMedium") -> float:
         else:
             # set the timestep required for stability when c_ref~=max(medium.sound_speed(:))
             dt_stability_limit = 2 / (c_ref * kmax) * np.asin(c_ref / medium.sound_speed.max())
+        t3 = time.time()
+        print(f"check_stability: non-absorbing case took {t3-t2:.3f} seconds")
 
     else:
         # =====================================================================
@@ -222,6 +230,8 @@ def check_stability(kgrid: "kWaveGrid", medium: "kWaveMedium") -> float:
             absorb_eta = 2 * medium.alpha_coeff * medium.sound_speed**medium.alpha_power * np.tan(np.pi * medium.alpha_power / 2)
         else:
             absorb_eta = np.array([0])
+        t3 = time.time()
+        print(f"check_stability: absorption coefficient calculation took {t3-t2:.3f} seconds")
 
         # estimate the timestep required for stability in the absorbing case by
         # assuming the k-space correction factor, kappa = 1 (note that
@@ -231,20 +241,25 @@ def check_stability(kgrid: "kWaveGrid", medium: "kWaveMedium") -> float:
         temp1 = medium.sound_speed.max() * absorb_tau.min() * kmax ** (medium.alpha_power - 1)
         temp2 = 1 - absorb_eta.min() * kmax ** (medium.alpha_power - 1)
         dt_estimate = (temp1 + np.sqrt(temp1**2 + 4 * temp2)) / (temp2 * kmax * medium.sound_speed.max())
+        t4 = time.time()
+        print(f"check_stability: initial timestep estimation took {t4-t3:.3f} seconds")
 
         # use a fixed point iteration to find the correct timestep, assuming
         # now that kappa = kappa(dt), using the previous estimate as a starting
         # point
+
+        max_sound_speed = medium.sound_speed.max()
+        absorb_tau_min = absorb_tau.min()
 
         # first define the function to iterate
         def kappa(dt):
             return sinc(c_ref * kmax * dt / 2)
 
         def temp3(dt):
-            return medium.sound_speed.max() * absorb_tau.min() * kappa(dt) * kmax ** (medium.alpha_power - 1)
+            return max_sound_speed * absorb_tau_min * kappa(dt) * kmax ** (medium.alpha_power - 1)
 
         def func_to_solve(dt):
-            return (temp3(dt) + np.sqrt((temp3(dt)) ** 2 + 4 * temp2)) / (temp2 * kmax * kappa(dt) * medium.sound_speed.max())
+            return (temp3(dt) + np.sqrt((temp3(dt)) ** 2 + 4 * temp2)) / (temp2 * kmax * kappa(dt) * max_sound_speed)
 
         # run the fixed point iteration
         dt_stability_limit = dt_estimate
@@ -252,6 +267,8 @@ def check_stability(kgrid: "kWaveGrid", medium: "kWaveMedium") -> float:
         while abs(dt_stability_limit - dt_old) > FIXED_POINT_ACCURACY:
             dt_old = dt_stability_limit
             dt_stability_limit = func_to_solve(dt_stability_limit)
+        t5 = time.time()
+        print(f"check_stability: fixed point iteration took {t5-t4:.3f} seconds")
 
     return dt_stability_limit
 

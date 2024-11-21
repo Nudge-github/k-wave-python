@@ -11,6 +11,8 @@ from .conversion import grid2cart
 from .data import scale_time
 from .matrix import sort_rows
 from .tictoc import TicToc
+import torch
+import torch.nn.functional as F
 
 
 def interpolate3d(grid_points: List[np.ndarray], grid_values: np.ndarray, interp_locs: List[np.ndarray]) -> np.ndarray:
@@ -58,6 +60,70 @@ def interpolate3d(grid_points: List[np.ndarray], grid_values: np.ndarray, interp
     # set values outside of the interpolation range to original values
     result[np.isnan(result)] = grid_values[np.isnan(result)]
     return result
+
+def interpolate3d_torch(grid_points: List[np.ndarray], grid_values: np.ndarray, interp_locs: List[np.ndarray]) -> np.ndarray:
+    """
+    Interpolates input grid values at the given locations
+    """
+
+    assert len(grid_points) == 3, "interpolate3D supports only 3D interpolation"
+    assert len(grid_points) == len(interp_locs)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    def unpack_and_make_1D(pts):
+        pts_x, pts_y, pts_z = pts
+        if pts_x.ndim == 3:
+            pts_x = pts_x[:, 0, 0]
+        if pts_y.ndim == 3:
+            pts_y = pts_y[0, :, 0]
+        if pts_z.ndim == 3:
+            pts_z = pts_z[0, 0, :]
+        return pts_x, pts_y, pts_z
+
+    g_x, g_y, g_z = unpack_and_make_1D(grid_points)
+    q_x, q_y, q_z = unpack_and_make_1D(interp_locs)
+    q_x = torch.from_numpy(q_x).contiguous().to(device)
+    q_y = torch.from_numpy(q_y).contiguous().to(device)
+    q_z = torch.from_numpy(q_z).contiguous().to(device)
+    g_x = torch.from_numpy(g_x).contiguous().to(device)
+    g_y = torch.from_numpy(g_y).contiguous().to(device)
+    g_z = torch.from_numpy(g_z).contiguous().to(device)
+
+    # Prepare grid_values
+    grid_values_torch = torch.from_numpy(grid_values).float().unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, D_in, H_in, W_in]
+
+    # Normalize query coordinates to [-1, 1]
+    def normalize_coords(q, g):
+        return 2 * (q - g.min()) / (g.max() - g.min()) - 1
+
+    q_x_norm = normalize_coords(q_x, g_x)
+    q_y_norm = normalize_coords(q_y, g_y)
+    q_z_norm = normalize_coords(q_z, g_z)
+
+    # Generate meshgrid in normalized coordinates
+    queries = torch.stack(torch.meshgrid(q_x_norm, q_y_norm, q_z_norm, indexing='ij'), dim=-1)  # Note the order
+
+    # Reshape queries to [1, D_out, H_out, W_out, 3]
+    queries = queries.unsqueeze(0).float()  # [1, D_out, H_out, W_out, 3]
+
+    # Permute grid_values to match the expected input shape
+    grid_values_torch = grid_values_torch.permute(0, 1, 4, 3, 2)  # [N, C, D_in, H_in, W_in]
+
+    # Perform interpolation
+    result2 = F.grid_sample(
+        grid_values_torch,
+        queries,
+        mode='bilinear',
+        padding_mode='border',
+        # padding_mode='zeros',
+        align_corners=True
+    )
+
+    # Remove batch and channel dimensions
+    result2 = result2[0, 0]  # [D_out, H_out, W_out]
+
+    return result2.cpu().numpy()
 
 
 def interpolate2d(
