@@ -22,8 +22,9 @@ if platform.startswith("linux"):
 elif platform.startswith(("win", "cygwin")):
     system = "windows"
 elif platform.startswith("darwin"):
-    system = "darwin"
-    raise NotImplementedError("k-wave-python is currently unsupported on MacOS.")
+    system = "linux"
+    #raise NotImplementedError("k-wave-python is currently unsupported on MacOS.")
+    print("k-wave-python is currently unsupported on MacOS.")
 
 binary_path = os.path.join(Path(__file__).parent, "bin", system)
 environ["KWAVE_BINARY_PATH"] = binary_path
